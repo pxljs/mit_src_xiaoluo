@@ -10,6 +10,7 @@ type Args struct {
 	Y int
 }
 
+// gai
 type Reply struct {
 	Res string
 }
