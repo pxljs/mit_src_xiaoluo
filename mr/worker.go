@@ -2,7 +2,6 @@ package mr
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -12,7 +11,7 @@ import "log"
 import "net/rpc"
 import "hash/fnv"
 
-// Map functions return a slice of KeyValue.
+// KeyValue Map functions return a slice of KeyValue.
 type KeyValue struct {
 	Key   string
 	Value string
@@ -79,6 +78,7 @@ func (job *Job) DoJob(mapf func(string, string) []KeyValue,
 }
 
 func CallFetchJob() JobFetchResp {
+	fmt.Printf(WorkerLogPrefix + "CallFetchJob job req 请求任务\n")
 	req := JobFetchReq{}
 	resp := JobFetchResp{}
 	call("Coordinator.JobFetch", &req, &resp)
@@ -154,20 +154,22 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	}
 	KeyValueList := mapf(job.FileName, string(str))
 	//创建新文件，个数为ReduceNumber
-	filelist := make([]*os.File, job.ReduceNumber)
+	filelist := make([]*os.File, 0)
 	for i := 0; i < job.ReduceNumber; i++ {
-		filename := "Map" + strconv.Itoa(job.ListIndex) + "--file" + strconv.Itoa(i)
-		file, err := os.Create(filename)
+		filename := "MapTask" + strconv.Itoa(job.ListIndex) + "--file" + strconv.Itoa(i) + ".txt"
+		file, _ := os.Create(filename)
+		fmt.Printf("已创建文件%v\n", filename)
 		filelist = append(filelist, file)
 	}
 	for i := 0; i < len(KeyValueList); i++ {
 		index := ihash(KeyValueList[i].Key) % job.ReduceNumber
-		io.WriteString(filelist[index], KeyValueList[i].Key)
+		filelist[index].WriteString(fmt.Sprint("%v %v\n", KeyValueList[i].Key, KeyValueList[i].Value))
 	}
 	for j := 0; j < job.ReduceNumber; j++ {
 		content, _ := os.ReadFile(filelist[j].Name())
 		keyValueList := mapf(filelist[j].Name(), string(content))
 		sort.Sort(ByKey(keyValueList))
+		fmt.Printf("文件%v已排序完成\n", filelist[j].Name())
 	}
 	return nil
 }

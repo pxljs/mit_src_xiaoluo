@@ -246,23 +246,15 @@ func (c *Coordinator) server() {
 	rpc.HandleHTTP()
 	//l, e := net.Listen("tcp", ":1234")
 	sockname := coordinatorSock()
-	err = os.Remove(sockname)
-	if err != nil {
-		return
-	}
+	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
-	go func() {
-		err := http.Serve(l, nil)
-		if err != nil {
-
-		}
-	}()
+	go http.Serve(l, nil)
 }
 
-// 创建服务端
+// MakeCoordinator 创建服务端
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	c.InitCoordinator(files, nReduce)
