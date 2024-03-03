@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 )
 import "log"
@@ -152,14 +153,16 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 		return err
 	}
 	KeyValueList := mapf(job.FileName, string(str))
-	sort.Sort(ByKey(KeyValueList))
-	//创建空文件
+	//创建新文件，个数为ReduceNumber
+	filelist := make([]*os.File, job.ReduceNumber)
 	for i := 0; i < job.ReduceNumber; i++ {
-		filename := fmt.Sprint("map", i, ".txt")
+		filename := "Map" + strconv.Itoa(job.ListIndex) + "--file" + strconv.Itoa(i)
 		file, err := os.Create(filename)
+		filelist = append(filelist, file)
 	}
 	for i := 0; i < len(KeyValueList); i++ {
-		io.WriteString(, KeyValueList[i].Key)
+		index := ihash(KeyValueList[i].Key) % job.ReduceNumber
+		io.WriteString(filelist[index], KeyValueList[i].Key)
 	}
 	for j := 0; j < job.ReduceNumber; j++ {
 		content, _ := os.ReadFile(filelist[j].Name())
