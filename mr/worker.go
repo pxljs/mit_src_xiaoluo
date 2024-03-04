@@ -177,8 +177,8 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(string, string) []KeyValue) error {
 	//fetch，从分区0开始依次读文件
 	kvlist := make([][]KeyValue, 0)
-	for i := 0; i < job.ReduceNumber; i++ {
-		filename := "MapTask" + strconv.Itoa(job.ListIndex) + "--file" + strconv.Itoa(i) + ".txt"
+	for i := 0; i < job.MapTasksNum; i++ {
+		filename := "MapTask" + strconv.Itoa(job.MapTasksNum) + "--file" + strconv.Itoa(job.ReduceID) + ".txt"
 		str, err := os.ReadFile(filename)
 		if err != nil {
 			return err
@@ -205,6 +205,7 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(str
 			cnt = 1
 		}
 	}
+
 	return nil
 }
 
@@ -225,7 +226,8 @@ func mergeK(kvlist [][]KeyValue) []KeyValue {
 
 func merge(l1, l2 []KeyValue) []KeyValue {
 	var l []KeyValue
-	for i, j := 0, 0; i < len(l1) && j < len(l2); {
+	i, j := 0, 0
+	for i < len(l1) && j < len(l2) {
 		if l1[i].Key <= l2[j].Key {
 			l = append(l, l1[i])
 			i++
