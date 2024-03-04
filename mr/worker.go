@@ -176,7 +176,7 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 
 func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(string, string) []KeyValue) error {
 	//fetch，从分区0开始依次读文件
-	kvlist := make([][]KeyValue, 0)
+	kvlist := make([][]KeyValue, job.ReduceNumber)
 	for i := 0; i < job.MapTasksNum; i++ {
 		filename := "MapTask" + strconv.Itoa(job.MapTasksNum) + "--file" + strconv.Itoa(job.ReduceID) + ".txt"
 		str, _ := os.ReadFile(filename)
