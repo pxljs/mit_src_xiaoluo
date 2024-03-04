@@ -159,7 +159,7 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 		fmt.Printf("已创建文件%v\n", filename)
 		filelist = append(filelist, file)
 	}
-	kvlist := make([][]KeyValue, 0)
+	kvlist := make([][]KeyValue, job.ReduceNumber)
 	for i := 0; i < len(KeyValueList); i++ {
 		index := ihash(KeyValueList[i].Key) % job.ReduceNumber
 		kvlist[index] = append(kvlist[index], KeyValueList[i])
