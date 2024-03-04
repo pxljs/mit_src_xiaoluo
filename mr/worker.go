@@ -165,9 +165,6 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	for i := 0; i < len(KeyValueList); i++ {
 		index := ihash(KeyValueList[i].Key) % job.ReduceNumber
 		kvlist[index] = append(kvlist[index], KeyValueList[i])
-		if err != nil {
-			return err
-		}
 	}
 	for j := 0; j < job.ReduceNumber; j++ {
 		sort.Sort(ByKey(kvlist[j]))
@@ -184,12 +181,11 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(str
 	kvlist := make([][]KeyValue, 0)
 	for i := 0; i < job.MapTasksNum; i++ {
 		filename := "MapTask" + strconv.Itoa(job.MapTasksNum) + "--file" + strconv.Itoa(job.ReduceID) + ".txt"
-		str, err := os.ReadFile(filename)
-		if err != nil {
-			return err
-		}
+		str, _ := os.ReadFile(filename)
 		keyValueList := mapf(filename, string(str))
-		kvlist = append(kvlist, keyValueList)
+		for _, kv := range keyValueList {
+			kvlist[i] = append(kvlist[i], kv)
+		}
 	}
 	res := mergeK(kvlist)
 	filename := "mr-out-" + strconv.Itoa(job.ReduceID)
