@@ -66,7 +66,7 @@ func (job *Job) DoJob(mapf func(string, string) []KeyValue,
 			fmt.Println("DoMapJob_error ", err)
 		}
 	case ReduceJob:
-		if err = job.DoReduceJob(reducef); err != nil {
+		if err = job.DoReduceJob(reducef, mapf); err != nil {
 			fmt.Println("DoReduceJob_error ", err)
 		}
 	}
@@ -156,7 +156,7 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	//创建新文件，个数为ReduceNumber
 	filelist := make([]*os.File, 0)
 	for i := 0; i < job.ReduceNumber; i++ {
-		filename := "MapTask" + strconv.Itoa(job.ListIndex) + "--file" + strconv.Itoa(i) + ".txt"
+		filename := "MapTask" + strconv.Itoa(job.ReduceID) + "--file" + strconv.Itoa(i) + ".txt"
 		file, _ := os.Create(filename)
 		fmt.Printf("已创建文件%v\n", filename)
 		filelist = append(filelist, file)
@@ -174,7 +174,73 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	return nil
 }
 
-func (job *Job) DoReduceJob(reducef func(string, []string) string) error {
-
+func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(string, string) []KeyValue) error {
+	//fetch，从分区0开始依次读文件
+	kvlist := make([][]KeyValue, 0)
+	for i := 0; i < job.ReduceNumber; i++ {
+		filename := "MapTask" + strconv.Itoa(job.ListIndex) + "--file" + strconv.Itoa(i) + ".txt"
+		str, err := os.ReadFile(filename)
+		if err != nil {
+			return err
+		}
+		keyValueList := mapf(filename, string(str))
+		kvlist = append(kvlist, keyValueList)
+	}
+	res := mergeK(kvlist)
+	filename := "Result" + strconv.Itoa(job.ReduceID) + ".txt"
+	file, _ := os.Create(filename)
+	cnt := 1
+	pre := ""
+	//统计单词次数
+	for i := 0; i < len(res); i++ {
+		if i == 0 {
+			pre = res[i].Key
+			continue
+		}
+		if res[i].Key == pre {
+			cnt++
+		} else {
+			file.WriteString(fmt.Sprint("%v %v\n", pre, cnt))
+			pre = res[i].Key
+			cnt = 1
+		}
+	}
 	return nil
+}
+
+// 合并n个内部有序键值组，可依次合并两个，进行n-1次合并即可
+func mergeK(kvlist [][]KeyValue) []KeyValue {
+	var pre, cur []KeyValue
+	n := len(kvlist)
+	for i := 0; i < n; i++ {
+		if i == 0 {
+			pre = kvlist[i]
+			continue
+		}
+		cur = kvlist[i]
+		pre = merge(pre, cur)
+	}
+	return pre
+}
+
+func merge(l1, l2 []KeyValue) []KeyValue {
+	var l []KeyValue
+	for i, j := 0, 0; i < len(l1) && j < len(l2); {
+		if l1[i].Key <= l2[j].Key {
+			l = append(l, l1[i])
+			i++
+		} else {
+			l = append(l, l2[j])
+			j++
+		}
+	}
+	for i < len(l1) {
+		l = append(l, l1[i])
+		i++
+	}
+	for j < len(l1) {
+		l = append(l, l2[j])
+		j++
+	}
+	return l
 }
