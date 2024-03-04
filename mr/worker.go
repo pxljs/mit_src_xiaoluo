@@ -148,10 +148,8 @@ func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	//读文件,返回值str为该文件的内容
-	str, err := os.ReadFile(job.FileName)
-	if err != nil {
-		return err
-	}
+	str, _ := os.ReadFile(job.FileName)
+	//将整个文件转换成键值对
 	KeyValueList := mapf(job.FileName, string(str))
 	//创建新文件，个数为ReduceNumber
 	filelist := make([]*os.File, 0)
