@@ -66,7 +66,7 @@ func (job *Job) DoJob(mapf func(string, string) []KeyValue,
 			fmt.Println("DoMapJob_error ", err)
 		}
 	case ReduceJob:
-		if err = job.DoReduceJob(reducef, mapf); err != nil {
+		if err = job.DoReduceJob(mapf); err != nil {
 			fmt.Println("DoReduceJob_error ", err)
 		}
 	}
@@ -154,7 +154,7 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	//创建新文件，个数为ReduceNumber
 	filelist := make([]*os.File, 0)
 	for i := 0; i < job.ReduceNumber; i++ {
-		filename := "MapTask" + strconv.Itoa(job.ReduceID) + "--file" + strconv.Itoa(i) + ".txt"
+		filename := "MapTask" + strconv.Itoa(job.ListIndex) + "--file" + strconv.Itoa(i) + ".txt"
 		file, _ := os.Create(filename)
 		fmt.Printf("已创建文件%v\n", filename)
 		filelist = append(filelist, file)
@@ -174,11 +174,11 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	return nil
 }
 
-func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(string, string) []KeyValue) error {
+func (job *Job) DoReduceJob(mapf func(string, string) []KeyValue) error {
 	//fetch，从分区0开始依次读文件
 	kvlist := make([][]KeyValue, job.ReduceNumber)
 	for i := 0; i < job.MapTasksNum; i++ {
-		filename := "MapTask" + strconv.Itoa(job.MapTasksNum) + "--file" + strconv.Itoa(job.ReduceID) + ".txt"
+		filename := "MapTask" + strconv.Itoa(i) + "--file" + strconv.Itoa(job.ReduceID) + ".txt"
 		str, _ := os.ReadFile(filename)
 		keyValueList := mapf(filename, string(str))
 		for _, kv := range keyValueList {

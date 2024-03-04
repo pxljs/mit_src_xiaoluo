@@ -16,7 +16,7 @@ import (
 // Coordinator 协调者，即服务端，Master
 type Coordinator struct {
 	Files         []string   //map任务文件名
-	ReduceNumber  int        //Reduce的数量，需要指定，Map任务的数量就是files的长度
+	ReduceNumber  int        //Reduce的数量，需要指定，Map任务的数量就是Files的长度
 	MapJobList    []*Job     //分发给worker的Map任务
 	ReduceJobList []*Job     //分发给worker的Reduce任务
 	JobListMutex  sync.Mutex //服务端的锁，在访问或者修改任务状态时需要加锁
@@ -31,6 +31,7 @@ type Job struct {
 	ReduceID     int    //reduce任务号，从0-（N-1）
 	ReduceNumber int    //reduce任务个数
 	JobType      int    //任务类型，1-map，2-reduce
+	MapTasksNum  int    //Map的任务总数
 	//动态信息
 	JobFinished    bool  //任务是否分配正确
 	StartTime      int64 //任务的分配时间（初始值为0），如果下次检查是否可分配时间超过2s,就当失败处理，重新分配
@@ -88,6 +89,7 @@ func (c *Coordinator) initMapJob() {
 			FileName:     file,
 			ListIndex:    i,
 			ReduceNumber: c.ReduceNumber,
+			MapTasksNum:  len(c.Files),
 		})
 	}
 	fmt.Printf(MasterLogPrefix+"master init finished %+v\n", toJsonString(c))
