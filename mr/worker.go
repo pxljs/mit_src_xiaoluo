@@ -161,14 +161,19 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 		fmt.Printf("已创建文件%v\n", filename)
 		filelist = append(filelist, file)
 	}
+	kvlist := make([][]KeyValue, 0)
 	for i := 0; i < len(KeyValueList); i++ {
 		index := ihash(KeyValueList[i].Key) % job.ReduceNumber
-		filelist[index].WriteString(fmt.Sprint("%v %v\n", KeyValueList[i].Key, KeyValueList[i].Value))
+		kvlist[index] = append(kvlist[index], KeyValueList[i])
+		if err != nil {
+			return err
+		}
 	}
 	for j := 0; j < job.ReduceNumber; j++ {
-		content, _ := os.ReadFile(filelist[j].Name())
-		keyValueList := mapf(filelist[j].Name(), string(content))
-		sort.Sort(ByKey(keyValueList))
+		sort.Sort(ByKey(kvlist[j]))
+		for _, kv := range kvlist[j] {
+			filelist[j].WriteString(fmt.Sprint(kv.Key, " ", kv.Value, "\n"))
+		}
 		fmt.Printf("文件%v已排序完成\n", filelist[j].Name())
 	}
 	return nil
@@ -187,8 +192,9 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(str
 		kvlist = append(kvlist, keyValueList)
 	}
 	res := mergeK(kvlist)
-	filename := "Result" + strconv.Itoa(job.ReduceID) + ".txt"
+	filename := "mr-out-" + strconv.Itoa(job.ReduceID)
 	file, _ := os.Create(filename)
+	fmt.Printf("文件%v已创建\n", file.Name())
 	cnt := 1
 	pre := ""
 	//统计单词次数
@@ -200,12 +206,13 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(str
 		if res[i].Key == pre {
 			cnt++
 		} else {
-			file.WriteString(fmt.Sprint("%v %v\n", pre, cnt))
+			file.WriteString(fmt.Sprint(pre, " ", strconv.Itoa(cnt), "\n"))
 			pre = res[i].Key
 			cnt = 1
 		}
 	}
-
+	//写入最后一个单词的统计结果
+	file.WriteString(fmt.Sprint(pre, " ", strconv.Itoa(cnt)))
 	return nil
 }
 
