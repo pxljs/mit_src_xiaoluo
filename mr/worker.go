@@ -66,7 +66,7 @@ func (job *Job) DoJob(mapf func(string, string) []KeyValue,
 			fmt.Println("DoMapJob_error ", err)
 		}
 	case ReduceJob:
-		if err = job.DoReduceJob(mapf); err != nil {
+		if err = job.DoReduceJob(reducef, mapf); err != nil {
 			fmt.Println("DoReduceJob_error ", err)
 		}
 	}
@@ -174,7 +174,7 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 	return nil
 }
 
-func (job *Job) DoReduceJob(mapf func(string, string) []KeyValue) error {
+func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(string, string) []KeyValue) error {
 	//fetch，从分区0开始依次读文件
 	kvlist := make([][]KeyValue, job.MapTasksNum)
 	fmt.Printf("kvlist的长度为:%v\n", len(kvlist))
@@ -199,24 +199,23 @@ func (job *Job) DoReduceJob(mapf func(string, string) []KeyValue) error {
 	filename := "mr-out-" + strconv.Itoa(job.ReduceID)
 	file, _ := os.Create(filename)
 	fmt.Printf("文件%v已创建\n", file.Name())
-	cnt := 1
-	pre := ""
-	//统计单词次数
-	for i := 0; i < len(res); i++ {
-		if i == 0 {
-			pre = res[i].Key
-			continue
+	i := 0
+	for i < len(res) {
+		j := i + 1
+		for j < len(res) && res[j].Key == res[i].Key {
+			j++
 		}
-		if res[i].Key == pre {
-			cnt++
-		} else {
-			file.WriteString(fmt.Sprint(pre, " ", strconv.Itoa(cnt), "\n"))
-			pre = res[i].Key
-			cnt = 1
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, res[k].Value)
 		}
+		output := reducef(res[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(file, "%v %v\n", res[i].Key, output)
+
+		i = j
 	}
-	//写入最后一个单词的统计结果
-	file.WriteString(fmt.Sprint(pre, " ", strconv.Itoa(cnt)))
 	return nil
 }
 
