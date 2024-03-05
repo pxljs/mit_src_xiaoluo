@@ -210,10 +210,8 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(str
 			values = append(values, res[k].Value)
 		}
 		output := reducef(res[i].Key, values)
-
 		// this is the correct format for each line of Reduce output.
 		fmt.Fprintf(file, "%v %v\n", res[i].Key, output)
-
 		i = j
 	}
 	return nil
