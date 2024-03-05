@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 import "log"
@@ -66,7 +67,7 @@ func (job *Job) DoJob(mapf func(string, string) []KeyValue,
 			fmt.Println("DoMapJob_error ", err)
 		}
 	case ReduceJob:
-		if err = job.DoReduceJob(reducef, mapf); err != nil {
+		if err = job.DoReduceJob(reducef); err != nil {
 			fmt.Println("DoReduceJob_error ", err)
 		}
 	}
@@ -170,27 +171,37 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 			filelist[j].WriteString(fmt.Sprint(kv.Key, " ", kv.Value, "\n"))
 		}
 		fmt.Printf("文件%v已排序完成\n", filelist[j].Name())
+		filelist[j].Close()
 	}
 	return nil
 }
 
-func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(string, string) []KeyValue) error {
+func (job *Job) DoReduceJob(reducef func(string, []string) string) error {
 	//fetch，从分区0开始依次读文件
 	kvlist := make([][]KeyValue, job.MapTasksNum)
 	fmt.Printf("kvlist的长度为:%v\n", len(kvlist))
 	for i := 0; i < job.MapTasksNum; i++ {
 		filename := "MapTask" + strconv.Itoa(i) + "--file" + strconv.Itoa(job.ReduceID) + ".txt"
-		str, err := os.ReadFile(filename)
+		content, err := os.ReadFile(filename)
 		if err != nil {
 			fmt.Printf("无法读取文件 %s: %v\n", filename, err)
 			continue
 		}
 		fmt.Printf("当前打开的文件为:%v\n", filename)
-		fmt.Printf("str的长度为:%v\n", len(str))
-		keyValueList := mapf(filename, string(str))
-		fmt.Printf("keyValueList的长度为:%v\n", len(keyValueList))
-		for _, kv := range keyValueList {
-			kvlist[i] = append(kvlist[i], kv)
+		fmt.Printf("content的长度为:%v\n", len(content))
+		//按行划分每对单词和value
+		lines := strings.Split(string(content), "\n")
+		for _, line := range lines {
+			if line == "" {
+				//行为空，跳过
+				continue
+			}
+			//将单词和value划分开来
+			kvPair := strings.Split(line, " ")
+			if len(kvPair) != 2 {
+				fmt.Println("format error")
+			}
+			kvlist[i] = append(kvlist[i], KeyValue{Key: kvPair[0], Value: kvPair[1]})
 		}
 	}
 	fmt.Printf("kvlist的长度为:%v\n", len(kvlist))
@@ -214,6 +225,7 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string, mapf func(str
 		fmt.Fprintf(file, "%v %v\n", res[i].Key, output)
 		i = j
 	}
+	file.Close()
 	return nil
 }
 
