@@ -176,16 +176,26 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 
 func (job *Job) DoReduceJob(mapf func(string, string) []KeyValue) error {
 	//fetch，从分区0开始依次读文件
-	kvlist := make([][]KeyValue, job.ReduceNumber)
+	kvlist := make([][]KeyValue, job.MapTasksNum)
+	fmt.Printf("kvlist的长度为:%v\n", len(kvlist))
 	for i := 0; i < job.MapTasksNum; i++ {
 		filename := "MapTask" + strconv.Itoa(i) + "--file" + strconv.Itoa(job.ReduceID) + ".txt"
-		str, _ := os.ReadFile(filename)
+		str, err := os.ReadFile(filename)
+		if err != nil {
+			fmt.Printf("无法读取文件 %s: %v\n", filename, err)
+			continue
+		}
+		fmt.Printf("当前打开的文件为:%v\n", filename)
+		fmt.Printf("str的长度为:%v\n", len(str))
 		keyValueList := mapf(filename, string(str))
+		fmt.Printf("keyValueList的长度为:%v\n", len(keyValueList))
 		for _, kv := range keyValueList {
 			kvlist[i] = append(kvlist[i], kv)
 		}
 	}
+	fmt.Printf("kvlist的长度为:%v\n", len(kvlist))
 	res := mergeK(kvlist)
+	fmt.Printf("res的长度为:%v\n", len(res))
 	filename := "mr-out-" + strconv.Itoa(job.ReduceID)
 	file, _ := os.Create(filename)
 	fmt.Printf("文件%v已创建\n", file.Name())
@@ -241,7 +251,7 @@ func merge(l1, l2 []KeyValue) []KeyValue {
 		l = append(l, l1[i])
 		i++
 	}
-	for j < len(l1) {
+	for j < len(l2) {
 		l = append(l, l2[j])
 		j++
 	}

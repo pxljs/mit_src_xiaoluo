@@ -118,6 +118,7 @@ func (c *Coordinator) generateReduceMap() {
 			ReduceID:     i,
 			ReduceNumber: c.ReduceNumber,
 			JobType:      ReduceJob,
+			MapTasksNum:  len(c.Files),
 		})
 	}
 	c.ReduceJobList = reduceJobList
