@@ -1,8 +1,8 @@
 package main
 
+import "C"
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/rpc"
 	"os"
@@ -16,10 +16,12 @@ type Arithmetic struct {
 	B  []string   //用于存放梨子
 	Mu sync.Mutex //添加保护锁
 }
+
 type Args struct {
 	X int
 	Y int
 }
+
 type Reply struct {
 	Res string
 }
@@ -61,20 +63,24 @@ func (a *Arithmetic) Distribute(req *Args, resp *Reply) error {
 
 func main() {
 	Ser := new(Arithmetic)
-	err := rpc.Register(Ser)
-	if err != nil {
-		return
-	}
+	rpc.Register(Ser)
 	Ser.Init()
-	listener, err := net.Listen("tcp", ":1234")
-	if err != nil {
-		log.Fatal("Listen error", err)
-	}
-	for {
-		connect, err := listener.Accept()
-		if err != nil {
-			log.Fatal("accept error", err)
-		}
+	Request := make(chan bool)
+	listener, _ := net.Listen("tcp", ":1234")
+	go func() {
+		connect, _ := listener.Accept()
 		go rpc.ServeConn(connect)
+	}()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop() // 确保在函数退出前停止Ticker
+	for {
+		select {
+		case <-ticker.C: //计时器到时
+			fmt.Println("超过10s未接收到客户端请求，服务器即将关闭")
+			return
+		case <-Request: //10s内收到客户端请求
+			ticker.Stop()                             // 停止当前的Ticker
+			ticker = time.NewTicker(10 * time.Second) // 重置ticker
+		}
 	}
 }
