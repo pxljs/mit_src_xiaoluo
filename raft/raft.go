@@ -115,7 +115,7 @@ const (
 	BaseElectionCyclePeriod = 200 * time.Millisecond
 
 	RPCRandomPeriod      = 10
-	ElectionRandomPeriod = 2000
+	ElectionRandomPeriod = 1000
 )
 
 // GlobalID 全局自增ID，需要原子性自增，用于debug
@@ -210,7 +210,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	reply = &RequestVoteReply{}
 	reply.ServerNumber = int32(rf.me)
 	fmt.Print(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, " 号机器收到 ", args.ServerNumber, " 号机器的投票请求, 自己的任期是 ", rf.Term, " 请求中的任期是", args.Term, " 自己的VotedFor", rf.VotedFor, " LastLogIndex:", args.LastLogIndex, " LastLogTerm:", args.LastLogTerm)
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
@@ -250,7 +249,7 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 			ServerNumber: int32(rf.me),
 		}
 		reply := &RequestVoteReply{}
-		fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器发送选主请求, 发给", index, " 号  自己的信息是:", fmt.Sprintf("%+v", *args))
+		fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器发送选举请求, 发给", index, "号，自己的信息是:", fmt.Sprintf("%+v", *args))
 		go func(i int) {
 			if flag := rf.sendRequestVote(i, args, reply); !flag {
 				//  网络原因，需要重发，这里先不实现
@@ -273,7 +272,7 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 		rf.convert2Follower(reply.Term) //将状态转化为Follower
 	}
 	fmt.Printf("reply.Agree字段的值是：%+v\n", reply.Agree)
-	fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器收到 ", reply.ServerNumber, " 号机器的投票回复，", reply.Agree, " 自己的Role:\n", rf.Role)
+	fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器收到 ", reply.ServerNumber, " 号机器的投票回复，", reply.Agree, " 自己的Role:", rf.Role)
 	// 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
 	rf.PeersVoteGranted[reply.ServerNumber] = reply.Agree
 	if rf.Role == RoleCandidate {
@@ -326,6 +325,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 		}
 		reply := &AppendEntriesReply{}
 		go func(i int) {
+			fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), rf.me, "号已向", i, "号发送心跳")
 			//util.Trace(fmt.Sprint(rf.me, "号机器开始发送心跳给", i, "号机器, 任期为 ", rf.Term, "  req为", fmt.Sprintf("%+v %s", *args, logPrint)))
 			if flag := rf.sendRPCAppendEntriesRequest(i, args, reply); !flag {
 				//  网络原因，需要重发
@@ -356,6 +356,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	}
 	reply.Term = rf.Term
 	reply.ServerNumber = int32(rf.me)
+	fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), rf.me, "已收到", req.ServerNumber, "的心跳")
 }
 
 // example code to send a RequestVote RPC to a server.
