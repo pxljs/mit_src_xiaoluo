@@ -115,7 +115,7 @@ const (
 	BaseElectionCyclePeriod = 200 * time.Millisecond
 
 	RPCRandomPeriod      = 10
-	ElectionRandomPeriod = 100
+	ElectionRandomPeriod = 101
 )
 
 // GlobalID 全局自增ID，需要原子性自增，用于debug
