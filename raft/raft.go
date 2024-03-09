@@ -325,24 +325,17 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 		if index == rf.me {
 			continue // 跳过自己
 		}
-		if rf.NextIndex[index] > 1 {
-			args := &AppendEntriesRequest{
-				Term:              rf.Term,
-				ServerNumber:      int32(rf.me),
-				PrevLogIndex:      rf.NextIndex[index] - 1,
-				PrevLogTerm:       rf.Log[rf.NextIndex[index]-1].Term,
-				LeaderCommitIndex: rf.CommitIndex,
-				Entries:           rf.Log[rf.NextIndex[index]-1:],
-			}
-		} else {
-			args := &AppendEntriesRequest{
-				Term:              rf.Term,
-				ServerNumber:      int32(rf.me),
-				PrevLogIndex:      0,
-				PrevLogTerm:       0,
-				LeaderCommitIndex: rf.CommitIndex,
-				Entries:           rf.Log[rf.NextIndex[index]-1:],
-			}
+		args := &AppendEntriesRequest{
+			Term:              rf.Term,
+			ServerNumber:      int32(rf.me),
+			PrevLogIndex:      rf.NextIndex[index] - 1,
+			LeaderCommitIndex: rf.CommitIndex,
+		}
+		if len(rf.Log) != 0 {
+			args.Entries = rf.Log[rf.NextIndex[index]-1:]
+		}
+		if args.PrevLogIndex != 0 {
+			args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
 		}
 		reply := &AppendEntriesReply{}
 		go func(i int) {
@@ -400,10 +393,14 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		reply.Success = true
 		reply.HasReplica = true
 	}
-	reply.MatchIndex = len(rf.Log)
 	if reply.HasReplica {
+		for _, log := range req.Entries { //复制日志
+			rf.Log = append(rf.Log, log)
+		}
 		Error("%+v号机器已复制来自%+v号机器发来的日志", rf.me, req.ServerNumber)
 	}
+	rf.CommitIndex = req.LeaderCommitIndex
+	reply.MatchIndex = len(rf.Log)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -475,10 +472,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.Log = append(rf.Log, LogEntry{
 		Term:    rf.Term,
-		Index:   len(rf.Log),
+		Index:   len(rf.Log) + 1,
 		Command: command,
+		ID:      atomic.AddInt64(&GlobalID, 1),
 	})
-	index = len(rf.Log) - 1
+	index = len(rf.Log)
+	Error("往%+v号机器的目录中添加了一条日志，该日志在目录中的Index为：%+v", rf.me, index)
 	return index, term, isLeader
 }
 
