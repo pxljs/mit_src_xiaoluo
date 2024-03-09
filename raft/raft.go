@@ -73,7 +73,6 @@ type LogEntry struct {
 type AppendEntriesReply struct {
 	Term         int64 // 自己这里维护的任期
 	ServerNumber int32 // 回复一下自己是哪台机器, 编号 [0,n)
-
 	// 2B、2C
 	Success    bool // 如果跟随者包含与prevLogIndex和prevLogTerm匹配的条目，则为true。
 	MatchIndex int  // 告诉leader最后一次复制完的日志index
@@ -91,15 +90,19 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	Term             int64  // 维护的任期，初始化的时候是1
-	Role             int32  // 角色  1-follower  2-candidate  3-leader
-	VotedFor         int32  // 投票给了谁 编号 [0,n)， 初始化时为-1
-	PeersVoteGranted []bool // 被投票的结果,leader才有意义
-
+	Term                           int64        // 维护的任期，初始化的时候是1
+	Role                           int32        // 角色  1-follower  2-candidate  3-leader
+	VotedFor                       int32        // 投票给了谁 编号 [0,n)， 初始化时为-1
+	PeersVoteGranted               []bool       // 被投票的结果,leader才有意义
 	RequestVoteTimeTicker          *time.Ticker // 投票循环计时器，follower和candidate才有意义
 	RequestVoteDuration            time.Duration
 	RequestAppendEntriesTimeTicker *time.Ticker // 心跳循环计时器，leader才有意义
 	RequestAppendEntriesDuration   time.Duration
+	Log                            []LogEntry    // 日志   第一个下标为1而不是0
+	CommitIndex                    int           // 已经提交的最大的日志index， 初始化为0
+	ApplyCh                        chan ApplyMsg // 检测程序所用，提交之后的日志发送到这里
+	NextIndex                      []int         // leader才有意义。对于各个raft节点，下一个需要接收的日志条目的索引，初始化为自己最后一个log的下标+1
+	MatchIndex                     []int         // leader才有意义。对于各个raft节点，已经复制过去的最高的日志下标【正常是从1开始，所以这里初始化是0】
 }
 
 const (
@@ -115,7 +118,7 @@ const (
 	BaseElectionCyclePeriod = 200 * time.Millisecond
 
 	RPCRandomPeriod      = 10
-	ElectionRandomPeriod = 1000
+	ElectionRandomPeriod = 100
 )
 
 // GlobalID 全局自增ID，需要原子性自增，用于debug
@@ -211,7 +214,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.ServerNumber = int32(rf.me)
-	fmt.Print(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, " 号机器收到 ", args.ServerNumber, " 号机器的投票请求, 自己的任期是 ", rf.Term, " 请求中的任期是", args.Term, " 自己的VotedFor", rf.VotedFor, " LastLogIndex:", args.LastLogIndex, " LastLogTerm:", args.LastLogTerm)
+	reply.Term = rf.Term
+	Info("%+v号机器收到%+v号机器的投票请求，自己的任期是:%+v,请求中的任期是:%+v,自己的VotedFor:%+v,LastLogIndex:%+v,LastLogTerm:%+v", rf.me, args.ServerNumber, rf.Term, args.Term, rf.VotedFor, args.LastLogIndex, args.LastLogTerm)
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	if args.Term > rf.Term {
 		rf.convert2Follower(args.Term)
@@ -219,19 +223,20 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.VotedFor = args.ServerNumber
 		//重置选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond))))
-	} else if args.Term == rf.Term { //任期相同且没有投票给其他机器
-		if rf.VotedFor == -1 {
+		return
+	}
+	if args.Term == rf.Term { //任期相同且没有投票给其他机器
+		if rf.VotedFor == InitVoteFor {
 			reply.Agree = true
 			rf.VotedFor = args.ServerNumber
 			//重置选举计时器
 			rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond))))
 		}
 	}
-	reply.Term = rf.Term
 	//reply.Agree=false可以不写，因为reply初始化时该字段值为false
 	// 当且仅当满足一下条件，才赞成投票。
 	// 论文原文 If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
-	fmt.Printf("%+v号机器回复%+v号机器选举，结果是:%+v\n", reply.ServerNumber, args.ServerNumber, reply.Agree)
+	Info("%+v号机器回复%+v号机器选举，结果是:%+v", reply.ServerNumber, args.ServerNumber, reply.Agree)
 }
 
 // AsyncBatchSendRequestVote Candidate发送投票请求
@@ -249,7 +254,7 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 			ServerNumber: int32(rf.me),
 		}
 		reply := &RequestVoteReply{}
-		fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器发送选举请求, 发给", index, "号，自己的信息是:", fmt.Sprintf("%+v", *args))
+		Info("%+v号机器发送选举请求,发给%+v号，自己的信息是:%+v", rf.me, index, fmt.Sprintf("%+v", *args))
 		go func(i int) {
 			if flag := rf.sendRequestVote(i, args, reply); !flag {
 				//  网络原因，需要重发，这里先不实现
@@ -258,7 +263,6 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 				rf.HandleRequestVoteResp(args, reply)
 			}
 		}(index)
-
 	}
 }
 
@@ -271,8 +275,7 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	if reply.Term > rf.Term {
 		rf.convert2Follower(reply.Term) //将状态转化为Follower
 	}
-	fmt.Printf("reply.Agree字段的值是：%+v\n", reply.Agree)
-	fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器收到 ", reply.ServerNumber, " 号机器的投票回复，", reply.Agree, " 自己的Role:", rf.Role)
+	Info("%+v号机器收到%+v号机器的投票回复:%+v,自己的Role:%+v", rf.me, reply.ServerNumber, reply.Agree, rf.Role)
 	// 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
 	rf.PeersVoteGranted[reply.ServerNumber] = reply.Agree
 	if rf.Role == RoleCandidate {
@@ -284,7 +287,10 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 		}
 		if VoteCount > len(rf.peers)/2 {
 			Success("当前的Leader为%+v号\n", rf.me)
-			rf.Role = RoleLeader         //状态转成Leader
+			rf.Role = RoleLeader                 //状态转成Leader
+			for index, _ := range rf.NextIndex { //成为leader更新NextIndex数组
+				rf.NextIndex[index] = len(rf.Log) + 1
+			}
 			go rf.backupGroundRPCCycle() //启动后台心跳线程
 		}
 	}
@@ -319,13 +325,28 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 		if index == rf.me {
 			continue // 跳过自己
 		}
-		args := &AppendEntriesRequest{
-			Term:         rf.Term,
-			ServerNumber: int32(rf.me),
+		if rf.NextIndex[index] > 1 {
+			args := &AppendEntriesRequest{
+				Term:              rf.Term,
+				ServerNumber:      int32(rf.me),
+				PrevLogIndex:      rf.NextIndex[index] - 1,
+				PrevLogTerm:       rf.Log[rf.NextIndex[index]-1].Term,
+				LeaderCommitIndex: rf.CommitIndex,
+				Entries:           rf.Log[rf.NextIndex[index]-1:],
+			}
+		} else {
+			args := &AppendEntriesRequest{
+				Term:              rf.Term,
+				ServerNumber:      int32(rf.me),
+				PrevLogIndex:      0,
+				PrevLogTerm:       0,
+				LeaderCommitIndex: rf.CommitIndex,
+				Entries:           rf.Log[rf.NextIndex[index]-1:],
+			}
 		}
 		reply := &AppendEntriesReply{}
 		go func(i int) {
-			fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), rf.me, "号已向", i, "号发送心跳")
+			Trace("%+v号已向%+v号发送心跳", rf.me, i)
 			//util.Trace(fmt.Sprint(rf.me, "号机器开始发送心跳给", i, "号机器, 任期为 ", rf.Term, "  req为", fmt.Sprintf("%+v %s", *args, logPrint)))
 			if flag := rf.sendRPCAppendEntriesRequest(i, args, reply); !flag {
 				//  网络原因，需要重发
@@ -341,6 +362,27 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *AppendEntriesReply) {
 	if reply.Term > rf.Term { //如果收到任期更大的机器发来的心跳响应，更新任期并转为Follower
 		rf.convert2Follower(reply.Term)
+		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond))))
+		return
+	}
+	rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
+	if reply.Success { //发送给其他机器的日志被成功复制
+		for i := rf.CommitIndex + 1; i <= len(rf.Log); i++ { //从已经提交的最大的日志的后一个日志开始计数，直到最后一个日志
+			LogCount := 0 //index为i的日志被复制的数量
+			for _, matchindex := range rf.MatchIndex {
+				if matchindex >= i {
+					LogCount++
+				}
+			}
+			if LogCount > len(rf.peers)/2 {
+				rf.ApplyCh <- ApplyMsg{
+					CommandValid: true,
+					Command:      rf.Log[i-1].Command,
+					CommandIndex: i - 1,
+				}
+				rf.CommitIndex++
+			}
+		}
 	}
 }
 
@@ -348,15 +390,20 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesReply) {
 	//重置选举计时器
 	rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond))))
-	if req.ServerNumber == int32(rf.me) { //如果Leader收到自己发出的心跳，直接return
-		return
-	}
 	if req.Term > rf.Term { //如果收到任期更大的心跳，更新任期并转为Follower
 		rf.convert2Follower(req.Term)
 	}
 	reply.Term = rf.Term
 	reply.ServerNumber = int32(rf.me)
-	fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), rf.me, "已收到", req.ServerNumber, "的心跳")
+	Trace("%+v号已收到%+v号的心跳", rf.me, req.ServerNumber)
+	if req.PrevLogIndex == len(rf.Log) {
+		reply.Success = true
+		reply.HasReplica = true
+	}
+	reply.MatchIndex = len(rf.Log)
+	if reply.HasReplica {
+		Error("%+v号机器已复制来自%+v号机器发来的日志", rf.me, req.ServerNumber)
+	}
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -420,9 +467,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := true
-
 	// Your code here (2B).
-
+	term = int(rf.Term)
+	if rf.Role != RoleLeader {
+		isLeader = false
+		return index, term, isLeader
+	}
+	rf.Log = append(rf.Log, LogEntry{
+		Term:    rf.Term,
+		Index:   len(rf.Log),
+		Command: command,
+	})
+	index = len(rf.Log) - 1
 	return index, term, isLeader
 }
 
@@ -447,7 +503,7 @@ func (rf *Raft) killed() bool {
 
 // 后台线程，选举超时计时器逻辑
 // The ticker go routine starts a new election if this peer hasn't received
-// heartsbeats recently.
+// heartbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		// Your code here to check if a leader election should
@@ -495,17 +551,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	// Your initialization code here (2A, 2B, 2C).
-	rf.VotedFor = -1       //初值为-1表示为未投票
-	rf.Term = 1            //初始任期为1
-	rf.Role = RoleFollower //初始状态为Follower
+	rf.VotedFor = InitVoteFor //初值为-1表示为未投票
+	rf.Term = InitTerm        //初始任期为1
+	rf.Role = RoleFollower    //初始状态为Follower
 	//初始化选举计时器
 	rf.RequestVoteDuration = BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond)))
 	rf.RequestVoteTimeTicker = time.NewTicker(rf.RequestVoteDuration)
 	//初始化心跳计时器
 	rf.RequestAppendEntriesDuration = BaseRPCCyclePeriod + time.Duration(rand.IntN((RPCRandomPeriod)*int(time.Millisecond)))
 	rf.RequestAppendEntriesTimeTicker = time.NewTicker(rf.RequestAppendEntriesDuration)
-	fmt.Println(rf.me, "号机器的选举循环周期是", rf.RequestVoteDuration.Milliseconds(),
-		"毫秒", "  rpc周期是", rf.RequestAppendEntriesDuration.Milliseconds(), "毫秒")
+	rf.ApplyCh = applyCh
+	Warning("%+v号机器的选举循环周期是:%+v毫秒,rpc周期是:%+v毫秒", rf.me, rf.RequestVoteDuration.Milliseconds(), rf.RequestAppendEntriesDuration.Milliseconds())
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	// start ticker goroutine to start elections
