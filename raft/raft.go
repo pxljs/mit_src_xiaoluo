@@ -334,7 +334,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 		if len(rf.Log) != 0 {
 			args.Entries = rf.Log[rf.NextIndex[index]-1:]
 		}
-		if args.PrevLogIndex != 0 {
+		if args.PrevLogIndex != 0 && args.PrevLogIndex < len(rf.Log) {
 			args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
 		}
 		reply := &AppendEntriesReply{}
@@ -359,7 +359,8 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 		return
 	}
 	rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
-	if reply.Success { //发送给其他机器的日志被成功复制
+	rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
+	if reply.HasReplica { //发送给其他机器的日志被成功复制
 		for i := rf.CommitIndex + 1; i <= len(rf.Log); i++ { //从已经提交的最大的日志的后一个日志开始计数，直到最后一个日志
 			LogCount := 0 //index为i的日志被复制的数量
 			for _, matchindex := range rf.MatchIndex {
@@ -368,10 +369,11 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 				}
 			}
 			if LogCount > len(rf.peers)/2 {
+				Error("Index为：%+v的日志已提交", i)
 				rf.ApplyCh <- ApplyMsg{
 					CommandValid: true,
 					Command:      rf.Log[i-1].Command,
-					CommandIndex: i - 1,
+					CommandIndex: i,
 				}
 				rf.CommitIndex++
 			}
@@ -391,13 +393,13 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	Trace("%+v号已收到%+v号的心跳", rf.me, req.ServerNumber)
 	if req.PrevLogIndex == len(rf.Log) {
 		reply.Success = true
-		reply.HasReplica = true
-	}
-	if reply.HasReplica {
-		for _, log := range req.Entries { //复制日志
-			rf.Log = append(rf.Log, log)
+		if len(req.Entries) != 0 { //Leader发来了日志
+			reply.HasReplica = true
+			for _, log := range req.Entries { //复制日志
+				rf.Log = append(rf.Log, log)
+				Error("%+v号机器已复制来自%+v号机器发来的日志,该日志的Index为：%+v", rf.me, req.ServerNumber, len(rf.Log))
+			}
 		}
-		Error("%+v号机器已复制来自%+v号机器发来的日志", rf.me, req.ServerNumber)
 	}
 	rf.CommitIndex = req.LeaderCommitIndex
 	reply.MatchIndex = len(rf.Log)
@@ -560,6 +562,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.RequestAppendEntriesDuration = BaseRPCCyclePeriod + time.Duration(rand.IntN((RPCRandomPeriod)*int(time.Millisecond)))
 	rf.RequestAppendEntriesTimeTicker = time.NewTicker(rf.RequestAppendEntriesDuration)
 	rf.ApplyCh = applyCh
+	rf.CommitIndex = 0
+	rf.Log = make([]LogEntry, 0)
+	rf.MatchIndex = make([]int, len(rf.peers))
+	rf.NextIndex = make([]int, len(rf.peers))
 	Warning("%+v号机器的选举循环周期是:%+v毫秒,rpc周期是:%+v毫秒", rf.me, rf.RequestVoteDuration.Milliseconds(), rf.RequestAppendEntriesDuration.Milliseconds())
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
