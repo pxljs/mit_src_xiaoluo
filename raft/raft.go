@@ -19,6 +19,7 @@ package raft
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 
 	//	"bytes"
@@ -336,12 +337,12 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 		if len(rf.Log) != 0 {
 			args.Entries = rf.Log[rf.NextIndex[index]-1:]
 		}
-		if args.PrevLogIndex != 0 && args.PrevLogIndex < len(rf.Log) {
+		if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Log) {
 			args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
 		}
 		reply := &AppendEntriesReply{}
 		go func(i int) {
-			Trace("%+v号已向%+v号发送心跳", rf.me, i)
+			Trace("%+v号已向%+v号发送心跳，心跳的内容为：%+v", rf.me, i, *args)
 			//util.Trace(fmt.Sprint(rf.me, "号机器开始发送心跳给", i, "号机器, 任期为 ", rf.Term, "  req为", fmt.Sprintf("%+v %s", *args, logPrint)))
 			if flag := rf.sendRPCAppendEntriesRequest(i, args, reply); !flag {
 				//  网络原因，需要重发
@@ -402,27 +403,46 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		//回应心跳
 		reply.Success = true
 		rf.VotedFor = req.ServerNumber
-
 		//————————————————进行日志处理
-
 		// todo 第二步：如果自己日志的此下标没有，或者任期和预期的不一样，返回false
 		// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-		if 1 > 2 {
+		if req.PrevLogIndex == 0 && len(rf.Log) == 0 { //初始时没有日志的情况
+			reply.Success = true
+			reply.MatchIndex = len(req.Entries)
+			if len(req.Entries) != 0 {
+				for _, pojo := range req.Entries { //添加日志
+					rf.Log = append(rf.Log, LogEntry{
+						Term:    pojo.Term,
+						Index:   len(rf.Log) + 1, // index语义从1开始
+						Command: pojo.Command,
+						ID:      pojo.ID,
+					})
+					reply.HasReplica = true
+				}
+			}
+			Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v", rf.me, req.ServerNumber, reply.Success)
+			return
+		}
+		if req.PrevLogIndex > len(rf.Log) || req.PrevLogTerm != rf.Log[req.PrevLogIndex-1].Term {
 			// todo 正确赋值 reply.MatchIndex
+			reply.MatchIndex = len(rf.Log)
 			reply.Success = false
+			Warning("PrevLogIndex的值是：%+v,Log的长度是：%+v", req.PrevLogIndex, len(rf.Log))
+			Warning("prevlogterm的值是：%+v,.term的长度是：%+v", req.PrevLogTerm, rf.Log[req.PrevLogIndex-1].Term)
 			Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
 			return
 		}
-
 		// todo 设置一下 reply.MatchIndex
-
+		reply.MatchIndex = len(rf.Log)
 		// todo 第三步：如果自己的日志和req中的发生任期冲突，删除所有已有的index之后的
 		// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
-		for _, pojo := range req.Entries {
-			// 删除自己本下标之后不一致的所有日志
-			for 1 > 2 {
-				Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1])))
-				rf.Log = rf.Log[:pojo.Index-1]
+		if req.Term != rf.Log[req.PrevLogIndex-1].Term {
+			for _, pojo := range req.Entries {
+				// 删除自己本下标之后不一致的所有日志
+				if rf.Log[pojo.Index-1].Term != req.Term {
+					Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1])))
+					rf.Log = rf.Log[:pojo.Index-1]
+				}
 			}
 		}
 
@@ -430,7 +450,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		// 4. Append any new entries not already in the log
 		for _, pojo := range req.Entries {
 			// 不要重复添加
-			if 1 > 2 {
+			if pojo.Index > len(rf.Log) {
 				// 不应该取 req 日志中的 index， 要重新弄成自己的index
 				rf.Log = append(rf.Log, LogEntry{
 					Term:    pojo.Term,
@@ -445,6 +465,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		// todo 第五步 如果req中leaderCommit > 自己的commitIndex，令 commitIndex 等于 leaderCommit 和最后一个新日志记录的 index 值之间的最小值
 		// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 		oldCommitIndex := rf.CommitIndex
+		rf.CommitIndex = int(math.Min(float64(req.LeaderCommitIndex), float64(len(rf.Log))))
 
 		// todo 第六步，当 CommitIndex 更新时，相当于提交，需要给检测程序发送
 		for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
@@ -457,7 +478,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		}
 
 		//先检查日志一致性，比较日志的最后一个条目和leader心跳信息中携带日志条目进行比较
-		if rf.Log[req.PrevLogIndex].Term != req.PrevLogTerm {
+		if rf.Log[len(rf.Log)-1].Term != req.Term {
 			//上一个任期不一致，则拒绝
 			reply.Success = false
 		}
@@ -470,7 +491,6 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 				}
 			}
 		}
-
 	} else {
 		// todo 这个 else 可以放到最前面，并直接 return ， 另外可以加一条打印
 		//收到任期小于自己，包反对
