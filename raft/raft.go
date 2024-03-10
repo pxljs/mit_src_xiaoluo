@@ -20,6 +20,7 @@ package raft
 import (
 	"fmt"
 	"math/rand/v2"
+
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -101,6 +102,7 @@ type Raft struct {
 	Log                            []LogEntry    // 日志   第一个下标为1而不是0
 	CommitIndex                    int           // 已经提交的最大的日志index， 初始化为0
 	ApplyCh                        chan ApplyMsg // 检测程序所用，提交之后的日志发送到这里
+	LastApplied                    int           // 最后一个被应用到[完成提交]状态机的日志下标, 实验2B用不到
 	NextIndex                      []int         // leader才有意义。对于各个raft节点，下一个需要接收的日志条目的索引，初始化为自己最后一个log的下标+1
 	MatchIndex                     []int         // leader才有意义。对于各个raft节点，已经复制过去的最高的日志下标【正常是从1开始，所以这里初始化是0】
 }
@@ -383,26 +385,101 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 
 // AppendEntries 收到心跳包，如何回应
 func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesReply) {
-	//重置选举计时器
-	rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond))))
-	if req.Term > rf.Term { //如果收到任期更大的心跳，更新任期并转为Follower
-		rf.convert2Follower(req.Term)
-	}
-	reply.Term = rf.Term
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	reply.ServerNumber = int32(rf.me)
-	Trace("%+v号已收到%+v号的心跳", rf.me, req.ServerNumber)
-	if req.PrevLogIndex == len(rf.Log) {
+	Trace("%+v号机器收到%+v号机器的心跳信息, 自己的任期是%+v请求中的任期是%+v自己的VotedFor%+v", rf.me, req.ServerNumber, rf.Term, req.Term, rf.VotedFor)
+
+	//收到任期大于等于自己，则都选择跟随，这里2A实验 candidate与follower情况相同，不作分类,在之后实验可能需要修改
+	if req.Term >= rf.Term {
+		rf.convert2Follower(req.Term)
+		reply.Term = rf.Term
+
+		//注意这里需要重置自己的选举计时器
+		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN(ElectionRandomPeriod)*int(time.Millisecond)))
+
+		//回应心跳
 		reply.Success = true
-		if len(req.Entries) != 0 { //Leader发来了日志
-			reply.HasReplica = true
-			for _, log := range req.Entries { //复制日志
-				rf.Log = append(rf.Log, log)
-				Error("%+v号机器已复制来自%+v号机器发来的日志,该日志的Index为：%+v", rf.me, req.ServerNumber, len(rf.Log))
+		rf.VotedFor = req.ServerNumber
+
+		//————————————————进行日志处理
+
+		// todo 第二步：如果自己日志的此下标没有，或者任期和预期的不一样，返回false
+		// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+		if 1 > 2 {
+			// todo 正确赋值 reply.MatchIndex
+			reply.Success = false
+			Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
+			return
+		}
+
+		// todo 设置一下 reply.MatchIndex
+
+		// todo 第三步：如果自己的日志和req中的发生任期冲突，删除所有已有的index之后的
+		// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
+		for _, pojo := range req.Entries {
+			// 删除自己本下标之后不一致的所有日志
+			for 1 > 2 {
+				Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1])))
+				rf.Log = rf.Log[:pojo.Index-1]
 			}
 		}
+
+		// todo 第四步，添加日志
+		// 4. Append any new entries not already in the log
+		for _, pojo := range req.Entries {
+			// 不要重复添加
+			if 1 > 2 {
+				// 不应该取 req 日志中的 index， 要重新弄成自己的index
+				rf.Log = append(rf.Log, LogEntry{
+					Term:    pojo.Term,
+					Index:   len(rf.Log) + 1, // index语义从1开始
+					Command: pojo.Command,
+					ID:      pojo.ID,
+				})
+				reply.HasReplica = true
+			}
+		}
+
+		// todo 第五步 如果req中leaderCommit > 自己的commitIndex，令 commitIndex 等于 leaderCommit 和最后一个新日志记录的 index 值之间的最小值
+		// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+		oldCommitIndex := rf.CommitIndex
+
+		// todo 第六步，当 CommitIndex 更新时，相当于提交，需要给检测程序发送
+		for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
+			rf.ApplyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      rf.Log[i].Command,
+				CommandIndex: rf.Log[i].Index,
+			}
+			rf.LastApplied = rf.CommitIndex
+		}
+
+		//先检查日志一致性，比较日志的最后一个条目和leader心跳信息中携带日志条目进行比较
+		if rf.Log[req.PrevLogIndex].Term != req.PrevLogTerm {
+			//上一个任期不一致，则拒绝
+			reply.Success = false
+		}
+		for _, log := range req.Entries {
+			//若在心跳信息中包含该日志
+			if rf.Log[req.PrevLogIndex+1].Index == log.Index {
+				//并且它们的索引和任期相同，则说明是同一条日志
+				if rf.Log[req.PrevLogIndex+1].Term == log.Term {
+
+				}
+			}
+		}
+
+	} else {
+		// todo 这个 else 可以放到最前面，并直接 return ， 另外可以加一条打印
+		//收到任期小于自己，包反对
+		reply.Term = rf.Term
+		reply.Success = false
 	}
-	rf.CommitIndex = req.LeaderCommitIndex
-	reply.MatchIndex = len(rf.Log)
+
+	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v", rf.me, req.ServerNumber, reply.Success)
+
 }
 
 // example code to send a RequestVote RPC to a server.
