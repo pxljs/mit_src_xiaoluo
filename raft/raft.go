@@ -382,23 +382,24 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	}
 	rf.MatchIndex[reply.ServerNumber+1] = reply.MatchIndex
 	rf.NextIndex[reply.ServerNumber+1] = reply.MatchIndex + 1
-	if reply.HasReplica { //发送给其他机器的日志被成功复制
-		for i := rf.CommitIndex + 1; i < len(rf.Log) && rf.CommitIndex < i; i++ { //从已经提交的最大的日志的后一个日志开始计数，直到最后一个日志
-			LogCount := 0 //index为i的日志被复制的数量
-			for _, matchindex := range rf.MatchIndex {
-				if matchindex >= i {
-					LogCount++
-				}
+	oldCommitIndex := rf.CommitIndex
+	for i := oldCommitIndex + 1; i < len(rf.Log); i++ { //从已经提交的最大的日志的后一个日志开始计数，直到最后一个日志
+		LogCount := 0 //index为i的日志被复制的数量
+		for _, matchindex := range rf.MatchIndex {
+			if matchindex >= i {
+				LogCount++
 			}
-			if LogCount >= len(rf.peers)/2 && rf.CommitIndex < i { //防止重复提交
-				rf.CommitIndex++
-				Success("Index为：%+v的日志已提交", i)
-				rf.ApplyCh <- ApplyMsg{
-					CommandValid: true,
-					Command:      rf.Log[i].Command,
-					CommandIndex: i,
-				}
-			}
+		}
+		if LogCount >= len(rf.peers)/2 {
+			rf.CommitIndex++
+		}
+	}
+	for idx := oldCommitIndex + 1; idx <= rf.CommitIndex; idx++ {
+		Success("Index为：%+v的日志已提交", idx)
+		rf.ApplyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.Log[idx].Command,
+			CommandIndex: idx,
 		}
 	}
 }
