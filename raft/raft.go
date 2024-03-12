@@ -217,11 +217,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.ServerNumber = int32(rf.me)
-	reply.Term = rf.Term
 	Info("%+v号机器收到%+v号机器的投票请求，自己的任期是:%+v,请求中的任期是:%+v,自己的VotedFor:%+v,LastLogIndex:%+v,LastLogTerm:%+v", rf.me, args.ServerNumber, rf.Term, args.Term, rf.VotedFor, args.LastLogIndex, args.LastLogTerm)
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	if args.Term > rf.Term {
 		rf.convert2Follower(args.Term)
+		reply.Term = rf.Term
 		if args.LastLogTerm > rf.Log[len(rf.Log)-1].Term || (args.LastLogTerm == rf.Log[len(rf.Log)-1].Term && args.LastLogIndex > len(rf.Log)-1) {
 			Error("我：%+v号机器最后一条日志的任期为：%+v，Log中日志的长度为%+v", rf.me, rf.Log[len(rf.Log)-1].Term, len(rf.Log)-1)
 			reply.Agree = true
@@ -236,6 +236,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			if args.LastLogTerm > rf.Log[len(rf.Log)-1].Term || (args.LastLogTerm == rf.Log[len(rf.Log)-1].Term && args.LastLogIndex >= len(rf.Log)-1) {
 				reply.Agree = true
 				rf.VotedFor = args.ServerNumber
+				reply.Term = rf.Term
 				//重置选举计时器
 				rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond))))
 			}
