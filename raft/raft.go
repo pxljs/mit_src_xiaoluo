@@ -387,7 +387,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 					LogCount++
 				}
 			}
-			if LogCount >= len(rf.peers)/2 && rf.CommitIndex < i {
+			if LogCount >= len(rf.peers)/2 && rf.CommitIndex < i { //防止重复提交
 				rf.CommitIndex++
 				Success("Index为：%+v的日志已提交", i)
 				rf.ApplyCh <- ApplyMsg{
