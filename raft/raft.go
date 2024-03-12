@@ -116,7 +116,7 @@ const (
 	InitVoteFor   = -1 // 初始化投票为空
 	InitTerm      = 1  // 初始化任期
 	//BaseRPCCyclePeriod 一轮rpc周期基线，在论文中有推荐的值，每个实例在这个基础上新增 0~ RPCRandomPeriod 毫秒的随机值
-	BaseRPCCyclePeriod = 20 * time.Millisecond
+	BaseRPCCyclePeriod = 50 * time.Millisecond
 	// BaseElectionCyclePeriod 一轮选举周期基线，在论文中有推荐的值，每个实例在这个基础上新增 0~ ElectionRandomPeriod 毫秒的随机值
 	BaseElectionCyclePeriod = 200 * time.Millisecond
 
@@ -304,6 +304,7 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 					continue
 				}
 				rf.NextIndex[index] = len(rf.Log)
+				rf.MatchIndex[index] = 0
 			}
 			go rf.backupGroundRPCCycle() //启动后台心跳线程
 		}
@@ -345,7 +346,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 			PrevLogIndex:      rf.NextIndex[index+1] - 1,
 			LeaderCommitIndex: rf.CommitIndex,
 		}
-		Error("向%+v号机器发送的心跳包中，rf.Log中日志的长度是：%+v，PrevLogIndex的值是：%+v", index, len(rf.Log)-1, args.PrevLogIndex)
+		Error("Leader：%+v号机器向%+v号机器发送的心跳包中，Leader的Log中日志的长度是：%+v，PrevLogIndex的值是：%+v", rf.me, index, len(rf.Log)-1, args.PrevLogIndex)
 		if args.PrevLogIndex < len(rf.Log) {
 			args.PrevLogTerm = rf.Log[args.PrevLogIndex].Term
 		}
@@ -368,6 +369,8 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 
 // HandleAppendEntriesResp 心跳 req 被返回了，处理一下,只有Leader才会收到心跳reply，并处理
 func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.Role != RoleLeader {
 		Error("当前%+v号机器已不是Leader，心跳响应失败", rf.me)
 		return
@@ -380,14 +383,14 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	rf.MatchIndex[reply.ServerNumber+1] = reply.MatchIndex
 	rf.NextIndex[reply.ServerNumber+1] = reply.MatchIndex + 1
 	if reply.HasReplica { //发送给其他机器的日志被成功复制
-		for i := rf.CommitIndex + 1; i < len(rf.Log); i++ { //从已经提交的最大的日志的后一个日志开始计数，直到最后一个日志
+		for i := rf.CommitIndex + 1; i < len(rf.Log) && rf.CommitIndex < i; i++ { //从已经提交的最大的日志的后一个日志开始计数，直到最后一个日志
 			LogCount := 0 //index为i的日志被复制的数量
 			for _, matchindex := range rf.MatchIndex {
 				if matchindex >= i {
 					LogCount++
 				}
 			}
-			if LogCount >= len(rf.peers)/2 && rf.CommitIndex < i { //防止重复提交。
+			if LogCount >= len(rf.peers)/2 && rf.CommitIndex < i { //防止重复提交
 				rf.CommitIndex++
 				Success("Index为：%+v的日志已提交", i)
 				rf.ApplyCh <- ApplyMsg{
@@ -539,6 +542,8 @@ func (rf *Raft) convert2Follower(term int64) {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	index := -1
 	term := -1
 	isLeader := true
