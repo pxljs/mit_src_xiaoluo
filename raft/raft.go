@@ -388,7 +388,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 			}
 			if LogCount >= len(rf.peers)/2 && rf.CommitIndex < i {
 				rf.CommitIndex++
-				Error("Index为：%+v的日志已提交", i)
+				Success("Index为：%+v的日志已提交", i)
 				rf.ApplyCh <- ApplyMsg{
 					CommandValid: true,
 					Command:      rf.Log[i].Command,
@@ -639,7 +639,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.ApplyCh = applyCh
 	rf.CommitIndex = 0
 	rf.Log = make([]LogEntry, 1)
-	rf.MatchIndex = make([]int, len(rf.peers)+1)
+	rf.MatchIndex = make([]int, len(rf.peers)+1) //下标从1开始，减少边界处理情况
 	rf.NextIndex = make([]int, len(rf.peers)+1)
 	Warning("%+v号机器的选举循环周期是:%+v毫秒,rpc周期是:%+v毫秒", rf.me, rf.RequestVoteDuration.Milliseconds(), rf.RequestAppendEntriesDuration.Milliseconds())
 	// initialize from state persisted before a crash
