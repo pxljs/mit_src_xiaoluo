@@ -129,14 +129,7 @@ var GlobalID = int64(100)
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	var term int
-	var isleader bool
-	term = int(rf.Term)
-	if rf.Role == RoleLeader {
-		isleader = true
-	}
-	// Your code here (2A).
-	return term, isleader
+	return int(rf.Term), rf.Role == RoleLeader
 }
 
 // save Raft's persistent state to stable storage,
@@ -277,12 +270,13 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	// todo your code
 	if reply.Term > rf.Term {
+		Warning(fmt.Sprint(" 投票响应中的任期大于自己的，重置自己任期和计时器, 并降级为 follower", rf.me, "号机器，任期为 ", rf.Term, " 响应任期为", reply.Term))
 		rf.convert2Follower(reply.Term) //将状态转化为Follower
 	}
 	Info("%+v号机器收到%+v号机器的投票回复:%+v,自己的Role:%+v", rf.me, reply.ServerNumber, reply.Agree, rf.Role)
 	// 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
 	rf.PeersVoteGranted[reply.ServerNumber] = reply.Agree
-	if rf.Role == RoleCandidate {
+	if rf.Role == RoleCandidate && rf.Term == reply.Term {
 		VoteCount := 0
 		for _, vote := range rf.PeersVoteGranted { //统计票数
 			if vote {
@@ -370,11 +364,24 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	}
 	if reply.Term > rf.Term { //如果收到任期更大的机器发来的心跳响应，更新任期并转为Follower
 		rf.convert2Follower(reply.Term)
+		Error("收到%+v号机器回复的心跳响应，自己的任期是：%+v，该机器的任期是：%+v,更新任期并转为follower", reply.ServerNumber, rf.Term, reply.Term)
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand.IntN((ElectionRandomPeriod)*int(time.Millisecond))))
 		return
 	}
-	rf.MatchIndex[reply.ServerNumber] = int(math.Max(float64(reply.MatchIndex), float64(rf.MatchIndex[reply.ServerNumber])))
-	rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
+	if rf.Role != RoleLeader {
+		return
+	}
+	if reply.Success { //日志复制成功
+		rf.MatchIndex[reply.ServerNumber] = int(math.Max(float64(reply.MatchIndex), float64(rf.MatchIndex[reply.ServerNumber])))
+		rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
+	} else if rf.Term == reply.Term {
+		// 如果leader发送的 AppendEntries 因为日志不一致而失败，减少 nextIndex 并重试. 根据follower的实现中，失败原因只有两种，一个是term不一致一个是日志不一致
+		oldNextIndex := rf.NextIndex[reply.ServerNumber]
+		// 下面是普通的情况，但需要优化。因为如果落下的很多，那么尝试对齐的次数太多导致长期达不到一致，导致测试TestFigure8Unreliable2C不通过
+		//rf.NextIndex[reply.ServerNumber] = MathMax(1, rf.NextIndex[reply.ServerNumber]-1)
+		rf.NextIndex[reply.ServerNumber] = int(math.Max(float64(1), float64(reply.MatchIndex+1)))
+		Warning(fmt.Sprint(rf.me, "号ld减少%d号机器的nextIndex从", oldNextIndex, "到", rf.NextIndex[reply.ServerNumber], " reply.MatchIndex:", reply.MatchIndex), reply.ServerNumber)
+	}
 	oldCommitIndex := rf.CommitIndex
 	for i := oldCommitIndex + 1; i <= len(rf.Log); i++ { //从已经提交的最大的日志的后一个日志开始计数，直到最后一个日志
 		LogCount := 0 //index为i的日志被复制的数量
@@ -464,7 +471,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 		oldCommitIndex := rf.CommitIndex
 		if req.LeaderCommitIndex > rf.CommitIndex {
-			rf.CommitIndex = int(math.Min(float64(req.LeaderCommitIndex), float64(len(rf.Log)-1)))
+			rf.CommitIndex = int(math.Min(float64(req.LeaderCommitIndex), float64(len(rf.Log))))
 		}
 
 		// todo 第六步，当 CommitIndex 更新时，相当于提交，需要给检测程序发送
@@ -544,11 +551,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := true
-	// Your code here (2B).
-	term = int(rf.Term)
-	if rf.Role != RoleLeader {
-		isLeader = false
+	term, isLeader = rf.GetState()
+	if !isLeader {
 		return index, term, isLeader
+	}
+	if rf.killed() {
+		return 0, 0, false
 	}
 	rf.Log = append(rf.Log, LogEntry{
 		Term:    rf.Term,
@@ -557,7 +565,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		ID:      atomic.AddInt64(&GlobalID, 1),
 	})
 	index = len(rf.Log)
-	Error("往%+v号机器的目录中添加了一条日志，该日志在目录中的Index为：%+v", rf.me, index)
+	Success("往%+v号机器的目录中添加了一条日志，该日志在目录中的Index为：%+v", rf.me, index)
 	return index, term, isLeader
 }
 
@@ -645,7 +653,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.MatchIndex = make([]int, len(rf.peers)) //下标从1开始，减少边界处理情况
 	rf.NextIndex = make([]int, len(rf.peers))
 	for index, _ := range rf.NextIndex {
-		rf.NextIndex[index] = 1
+		rf.NextIndex[index] = rf.CommitIndex + 1
 	}
 	Warning("%+v号机器的选举循环周期是:%+v毫秒,rpc周期是:%+v毫秒", rf.me, rf.RequestVoteDuration.Milliseconds(), rf.RequestAppendEntriesDuration.Milliseconds())
 	// initialize from state persisted before a crash
