@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.824/labgob"
+	"bytes"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -138,12 +140,14 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.VotedFor)
+	e.Encode(rf.Term)
+	e.Encode(rf.Log)
+
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
@@ -153,17 +157,13 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	d.Decode(&rf.Term)
+	d.Decode(&rf.VotedFor)
+	d.Decode(&rf.Log)
+	rf.CommitIndex = 1
+	Success("%d号机器Decode成功", rf.me)
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -208,6 +208,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	reply.ServerNumber = int32(rf.me)
 	Info("%+v号机器收到%+v号机器的投票请求，自己的任期是:%+v,请求中的任期是:%+v,自己的VotedFor:%+v,LastLogIndex:%+v,LastLogTerm:%+v", rf.me, args.ServerNumber, rf.Term, args.Term, rf.VotedFor, args.LastLogIndex, args.LastLogTerm)
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
@@ -267,6 +268,7 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	// todo your code
 	if reply.Term > rf.Term {
@@ -358,6 +360,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	if rf.Role != RoleLeader {
 		Error("当前%+v号机器已不是Leader，心跳响应失败", rf.me)
 		return
@@ -408,6 +411,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	reply.ServerNumber = int32(rf.me)
 	Trace("%+v号机器收到%+v号机器的心跳信息, 自己的任期是%+v请求中的任期是%+v自己的VotedFor%+v", rf.me, req.ServerNumber, rf.Term, req.Term, rf.VotedFor)
@@ -548,6 +552,8 @@ func (rf *Raft) convert2Follower(term int64) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
+
 	index := -1
 	term := -1
 	isLeader := true
@@ -650,7 +656,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.ApplyCh = applyCh
 	rf.CommitIndex = 0
 	rf.Log = make([]LogEntry, 0)
-	rf.MatchIndex = make([]int, len(rf.peers)) //下标从1开始，减少边界处理情况
+	rf.MatchIndex = make([]int, len(rf.peers))
 	rf.NextIndex = make([]int, len(rf.peers))
 	for index, _ := range rf.NextIndex {
 		rf.NextIndex[index] = rf.CommitIndex + 1
