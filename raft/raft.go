@@ -145,6 +145,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.VotedFor)
 	e.Encode(rf.Term)
 	e.Encode(rf.Log)
+	e.Encode(rf.CommitIndex)
 
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
@@ -162,7 +163,8 @@ func (rf *Raft) readPersist(data []byte) {
 	d.Decode(&rf.Term)
 	d.Decode(&rf.VotedFor)
 	d.Decode(&rf.Log)
-	rf.CommitIndex = 1
+	d.Decode(&rf.CommitIndex)
+
 	Success("%d号机器Decode成功", rf.me)
 }
 
