@@ -27,7 +27,7 @@ type PutAppendReply struct {
 
 type GetArgs struct {
 	Key   string
-	SeqID int64
+	SeqID int64 //命令编号
 	// You'll have to add definitions here.
 }
 
