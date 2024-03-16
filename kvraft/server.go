@@ -43,10 +43,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	kv.rf.Start(args)
 
-	reply.Err = "" //修改前先清空
-	_, isleader := kv.rf.GetState()
+	_, _, isleader := kv.rf.Start(args)
 	if !isleader {
 		reply.Err = "Not Leader"
 		return
@@ -78,8 +76,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	defer kv.mu.Unlock()
 	kv.rf.Start(args)
 
-	reply.Err = "" //修改前先清空
-	_, isleader := kv.rf.GetState()
+	_, _, isleader := kv.rf.Start(args)
 	if !isleader {
 		reply.Err = "Not Leader"
 		return

@@ -40,13 +40,13 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	req := &GetArgs{
-		Key:   key,
-		SeqID: atomic.AddInt64(&GlobalID, 1),
-	}
-	resp := &GetReply{}
 	for {
 		for i, _ := range ck.servers {
+			req := &GetArgs{
+				Key:   key,
+				SeqID: atomic.AddInt64(&GlobalID, 1),
+			}
+			resp := &GetReply{}
 			b := ck.servers[i].Call("KVServer.Get", req, resp)
 			if !b {
 				//网络错误，需要重试
@@ -72,15 +72,15 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	req := &PutAppendArgs{
-		Key:   key,
-		Value: value,
-		Op:    op,
-		SeqID: atomic.AddInt64(&GlobalID, 1),
-	}
-	resp := &PutAppendReply{}
 	for {
 		for i, _ := range ck.servers {
+			req := &PutAppendArgs{
+				Key:   key,
+				Value: value,
+				Op:    op,
+				SeqID: atomic.AddInt64(&GlobalID, 1),
+			}
+			resp := &PutAppendReply{}
 			b := ck.servers[i].Call("KVServer.PutAppend", req, resp)
 			if !b {
 				//网络错误，需要重试
